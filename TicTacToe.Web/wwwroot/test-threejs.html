@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Test</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            max-width: 300px;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>Three.js Diagnostic Test</h3>
+        <div id="status">Loading...</div>
+    </div>
+    <div id="container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script type="module">
+        const statusEl = document.getElementById('status');
+        
+        function log(message, isError = false) {
+            console.log(message);
+            const p = document.createElement('p');
+            p.textContent = message;
+            p.className = isError ? 'error' : 'success';
+            statusEl.appendChild(p);
+        }
+
+        try {
+            // Check THREE loaded
+            if (typeof THREE === 'undefined') {
+                throw new Error('THREE not loaded');
+            }
+            log('? THREE.js loaded');
+
+            // Create scene
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+            log('? Scene created');
+
+            // Create camera
+            const camera = new THREE.PerspectiveCamera(
+                60, 
+                window.innerWidth / window.innerHeight, 
+                0.1, 
+                1000
+            );
+            camera.position.set(5, 4, 5);
+            camera.lookAt(0, 0, 0);
+            log('? Camera positioned');
+
+            // Create renderer
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('container').appendChild(renderer.domElement);
+            log('? Renderer created');
+
+            // Add lights
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(10, 10, 10);
+            scene.add(directionalLight);
+            log('? Lights added');
+
+            // Create a simple cube
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0x06b6d4,
+                emissive: 0x22d3ee,
+                emissiveIntensity: 0.3,
+                metalness: 0.8,
+                roughness: 0.2
+            });
+            const cube = new THREE.Mesh(geometry, material);
+            scene.add(cube);
+            log('? Test cube created');
+
+            // Add edges
+            const edges = new THREE.EdgesGeometry(geometry);
+            const line = new THREE.LineSegments(
+                edges,
+                new THREE.LineBasicMaterial({ color: 0x60a5fa })
+            );
+            cube.add(line);
+            log('? Edges added');
+
+            // Animation loop
+            function animate() {
+                requestAnimationFrame(animate);
+                
+                // Rotate cube
+                cube.rotation.x += 0.01;
+                cube.rotation.y += 0.01;
+                
+                renderer.render(scene, camera);
+            }
+
+            animate();
+            log('? Animation started');
+            log('--- ALL TESTS PASSED ---');
+            log('You should see a rotating cyan cube!');
+
+            // Handle resize
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+        } catch (error) {
+            log('? ERROR: ' + error.message, true);
+            console.error(error);
+        }
+    </script>
+</body>
+</html>

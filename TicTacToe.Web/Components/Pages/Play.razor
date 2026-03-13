@@ -1,0 +1,388 @@
+@page "/play"
+@rendermode InteractiveServer
+@using TicTacToe.Engine
+@using TicTacToe.Web.Data
+@using TicTacToe.Web.Services
+@using TicTacToe.Web.Components.Game
+@inject GameDataService DataService
+@inject GameSession Session
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>3D Tic-Tac-Toe</PageTitle>
+
+<div class="container mt-4">
+    <div class="text-center mb-4">
+        <h2 class="display-4">🎮 3D Tic-Tac-Toe</h2>
+        
+        @if (!Session.Board.IsGameOver)
+        {
+            <p class="lead">Current Player: <strong class="@GetPlayerClass()">@Session.Board.CurrentPlayer</strong></p>
+        }
+        else if (Session.Board.Winner != Player.None)
+        {
+            <div class="alert alert-success">
+                <h4>🎉 Game Over! Winner: <strong>@Session.Board.Winner</strong></h4>
+                <p>Winning positions: @string.Join(", ", Session.Board.WinningPositions)</p>
+            </div>
+        }
+        else
+        {
+            <div class="alert alert-info">
+                <h4>🤝 Game Over - It's a Draw!</h4>
+            </div>
+        }
+
+        <div class="mb-3">
+            <button class="btn btn-success btn-lg" @onclick="ResetGame">
+                🔄 New Game
+            </button>
+        </div>
+
+        <div class="text-center mb-4">
+            <h5>Board Size</h5>
+            <div class="btn-group" role="group" aria-label="Board size selector">
+                <button class="btn @GetBtnClass(3)" @onclick="() => SetBoardSize(3)">
+                    3×3×3
+                </button>
+                <button class="btn @GetBtnClass(4)" @onclick="() => SetBoardSize(4)">
+                    4×4×4
+                </button>
+                <button class="btn @GetBtnClass(5)" @onclick="() => SetBoardSize(5)">
+                    5×5×5
+                </button>
+            </div>
+        </div>
+
+        @if (Session.GamesPlayed > 0)
+        {
+            <div class="card mt-3">
+                <div class="card-body">
+                    <h6>📊 Session Statistics</h6>
+                    <p class="mb-0">
+                        Games: @Session.GamesPlayed | 
+                        X Wins: @Session.PlayerXWins | 
+                        O Wins: @Session.PlayerOWins | 
+                        Draws: @Session.Draws
+                    </p>
+                </div>
+            </div>
+        }
+
+        <div class="card mt-4 text-start">
+            <div class="card-body">
+                <h5 class="card-title">Save and Load</h5>
+                <p class="text-muted mb-3">
+                    Save a game by player name so you can close the browser, come back later, and continue where you left off.
+                </p>
+
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <label class="form-label" for="playerName">Player Name</label>
+                        <input id="playerName"
+                               type="text"
+                               class="form-control"
+                               placeholder="Enter player name"
+                               @bind="playerName"
+                               @bind:event="oninput"
+                               @bind:after="OnPlayerNameChangedAsync" />
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label" for="gameName">Save Name</label>
+                        <input id="gameName"
+                               type="text"
+                               class="form-control"
+                               placeholder="Optional save label"
+                               @bind="gameName" />
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end gap-2">
+                        <button class="btn btn-success flex-fill" @onclick="SaveCurrentGameAsync">
+                            Save Game
+                        </button>
+                        <button class="btn btn-outline-secondary flex-fill" @onclick="RefreshSavedGamesAsync">
+                            Load Saves
+                        </button>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(statusMessage))
+                {
+                    <div class="alert @statusClass mt-3 mb-0">
+                        @statusMessage
+                    </div>
+                }
+
+                @if (savedGames.Count > 0)
+                {
+                    <div class="mt-3">
+                        <h6>Saved Games for @playerName.Trim()</h6>
+                        <div class="list-group">
+                            @foreach (var saved in savedGames)
+                            {
+                                <div class="list-group-item d-flex justify-content-between align-items-start gap-3">
+                                    <div>
+                                        <strong>@saved.FriendlyName</strong>
+                                        <div class="small text-muted">
+                                            @saved.BoardSize x @saved.BoardSize x @saved.BoardSize |
+                                            @(saved.Winner ?? "In Progress") |
+                                            @saved.MoveCount moves |
+                                            @saved.CreatedAt.ToLocalTime().ToString("g")
+                                        </div>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-sm btn-primary" @onclick="() => LoadSavedGameAsync(saved.Id)">
+                                            Load
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteSavedGameAsync(saved.Id)">
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <BoardDisplay Board="@Session.Board" OnCellClick="HandleMove" />
+
+    @if (Session.Board.MoveHistory.Count > 0 && !Session.Board.IsGameOver)
+    {
+        <div class="mt-4">
+            <h5>Move History</h5>
+            <div class="move-history">
+                @foreach (var (move, index) in Session.Board.MoveHistory.Select((m, i) => (m, i)))
+                {
+                    <span class="badge bg-secondary me-1">
+                        @(index + 1). @move.Player: (@move.X,@move.Y,@move.Z)
+                    </span>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly List<SavedGame> savedGames = [];
+    private string playerName = string.Empty;
+    private string gameName = string.Empty;
+    private string statusMessage = string.Empty;
+    private string statusClass = "alert-info";
+    private bool isRestoringState;
+
+    protected override void OnInitialized()
+    {
+        // Subscribe to state changes
+        Session.OnStateChanged += OnSessionStateChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        var storedPlayerName = await JS.InvokeAsync<string>("tttPlayerState.getPlayerName");
+        if (string.IsNullOrWhiteSpace(storedPlayerName))
+        {
+            return;
+        }
+
+        playerName = storedPlayerName.Trim();
+        await ReloadSavedGamesAsync(playerName);
+        await RestoreLatestAutoSaveAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleMove((int x, int y, int z) move)
+    {
+        if (Session.Board.IsGameOver) return;
+        
+        bool success = Session.MakeMove(move.x, move.y, move.z);
+        
+        // Optional: Add toast notification for invalid moves
+        // if (!success) { ShowToast("Invalid move!"); }
+    }
+
+    private void ResetGame()
+    {
+        if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
+        {
+            Session.RecordGameResult();
+        }
+        Session.ResetGame();
+    }
+
+    private void SetBoardSize(int size)
+    {
+        if (Session.Board.Size == size) return;
+        if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
+        {
+            Session.RecordGameResult();
+        }
+        Session.StartNewGame(size);
+    }
+
+    private async Task SaveCurrentGameAsync()
+    {
+        if (!TryGetPlayerName(out var normalizedPlayerName))
+        {
+            return;
+        }
+
+        await DataService.SaveGameAsync(Session, normalizedPlayerName, gameName);
+        gameName = string.Empty;
+        SetStatus($"Game saved for {normalizedPlayerName}.", "alert-success");
+        await ReloadSavedGamesAsync(normalizedPlayerName);
+    }
+
+    private async Task RefreshSavedGamesAsync()
+    {
+        if (!TryGetPlayerName(out var normalizedPlayerName))
+        {
+            return;
+        }
+
+        await ReloadSavedGamesAsync(normalizedPlayerName);
+        SetStatus($"Loaded {savedGames.Count} saved game(s) for {normalizedPlayerName}.", "alert-info");
+    }
+
+    private async Task LoadSavedGameAsync(Guid id)
+    {
+        if (!TryGetPlayerName(out var normalizedPlayerName))
+        {
+            return;
+        }
+
+        var savedGame = await DataService.GetGameByIdAsync(id, normalizedPlayerName);
+        if (savedGame is null)
+        {
+            SetStatus("That saved game could not be found.", "alert-warning");
+            await ReloadSavedGamesAsync(normalizedPlayerName);
+            return;
+        }
+
+        Session.LoadGame(savedGame.GameJson);
+        SetStatus($"Loaded \"{savedGame.FriendlyName}\" for {normalizedPlayerName}.", "alert-success");
+        await ReloadSavedGamesAsync(normalizedPlayerName);
+    }
+
+    private async Task DeleteSavedGameAsync(Guid id)
+    {
+        if (!TryGetPlayerName(out var normalizedPlayerName))
+        {
+            return;
+        }
+
+        var deleted = await DataService.DeleteGameAsync(id, normalizedPlayerName);
+        SetStatus(
+            deleted ? "Saved game deleted." : "That saved game could not be found.",
+            deleted ? "alert-success" : "alert-warning");
+        await ReloadSavedGamesAsync(normalizedPlayerName);
+    }
+
+    private async Task OnPlayerNameChangedAsync()
+    {
+        playerName = playerName.TrimStart();
+        await JS.InvokeVoidAsync("tttPlayerState.setPlayerName", playerName);
+
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            savedGames.Clear();
+            return;
+        }
+
+        await ReloadSavedGamesAsync(playerName.Trim());
+        await AutoSaveCurrentStateAsync();
+    }
+
+    private async Task ReloadSavedGamesAsync(string normalizedPlayerName)
+    {
+        savedGames.Clear();
+        savedGames.AddRange(await DataService.GetGamesByPlayerNameAsync(normalizedPlayerName));
+    }
+
+    private async void OnSessionStateChanged()
+    {
+        await InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await AutoSaveCurrentStateAsync();
+        });
+    }
+
+    private async Task AutoSaveCurrentStateAsync()
+    {
+        if (isRestoringState || string.IsNullOrWhiteSpace(playerName))
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("tttPlayerState.setPlayerName", playerName);
+        await DataService.UpsertAutoSaveAsync(Session, playerName.Trim());
+    }
+
+    private async Task RestoreLatestAutoSaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            return;
+        }
+
+        var autoSave = await DataService.GetLatestAutoSaveAsync(playerName.Trim());
+        if (autoSave is null)
+        {
+            return;
+        }
+
+        isRestoringState = true;
+        try
+        {
+            Session.LoadGame(autoSave.GameJson);
+            SetStatus($"Restored your latest game for {playerName.Trim()}.", "alert-info");
+        }
+        finally
+        {
+            isRestoringState = false;
+        }
+    }
+
+    private bool TryGetPlayerName(out string normalizedPlayerName)
+    {
+        normalizedPlayerName = playerName.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedPlayerName))
+        {
+            playerName = normalizedPlayerName;
+            return true;
+        }
+
+        SetStatus("Enter a player name before saving or loading games.", "alert-warning");
+        savedGames.Clear();
+        return false;
+    }
+
+    private void SetStatus(string message, string cssClass)
+    {
+        statusMessage = message;
+        statusClass = cssClass;
+    }
+
+    private string GetBtnClass(int size)
+    {
+        return Session.Board.Size == size ? "btn-primary" : "btn-outline-primary";
+    }
+
+    private string GetPlayerClass()
+    {
+        return Session.Board.CurrentPlayer == Player.X ? "text-primary" : "text-warning";
+    }
+
+    public void Dispose()
+    {
+        // Unsubscribe to prevent memory leaks
+        Session.OnStateChanged -= OnSessionStateChanged;
+    }
+}

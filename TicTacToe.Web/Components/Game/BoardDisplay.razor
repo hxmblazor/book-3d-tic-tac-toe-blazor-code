@@ -1,0 +1,42 @@
+@using TicTacToe.Engine
+@namespace TicTacToe.Web.Components.Game
+
+<div class="d-flex flex-wrap justify-content-center gap-4">
+    @for (int z = 1; z <= Board.Size; z++)
+    {
+        <div class="text-center">
+            <h5>Layer @z</h5>
+            <div class="layer-grid" 
+                 style="grid-template-columns: repeat(@Board.Size, @GetCellSize());">
+                
+                @for (int y = 1; y <= Board.Size; y++)
+                {
+                    @for (int x = 1; x <= Board.Size; x++)
+                    {
+                        int cx = x; int cy = y; int cz = z;
+                        var player = Board.GetPlayer(cx, cy, cz);
+                        bool isWin = IsWinningCell(cx, cy, cz);
+                        bool isPending = IsPendingCell(cx, cy, cz);
+
+                        <div class="game-cell @(isWin ? "winning-position" : "") @(isPending ? "pending-move" : "")"
+                             @onclick="() => OnCellClick.InvokeAsync((cx, cy, cz))">
+
+                            @if (player == Player.X) 
+                            { 
+                                <span class="cell-x">X</span> 
+                            }
+                            else if (player == Player.O) 
+                            { 
+                                <span class="cell-o">O</span> 
+                            }
+                            else if (isPending)
+                            {
+                                <span style="color: white; font-size: 0.8em;">⏱️</span>
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>

@@ -1,0 +1,1029 @@
+@page "/play3d"
+@rendermode InteractiveServer
+@using TicTacToe.Engine
+@using TicTacToe.Web.Data
+@using TicTacToe.Web.Services
+@using TicTacToe.Web.Components.Game
+@inject GameDataService DataService
+@inject GameSession Session
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>3D Tic-Tac-Toe - Immersive View</PageTitle>
+
+<style>
+    /* Break out of MainLayout's article padding for full-width 3D view */
+    article.content:has(.layout-wrapper) {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: 100% !important;
+    }
+
+    #canvas-container {
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+    }
+    #canvas-container canvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+    }
+    .visualization-panel {
+        min-width: 0;
+        height: 100%;
+    }
+    .game-panel {
+        min-width: 0;
+    }
+    .layout-wrapper {
+        display: flex;
+        width: 100%;
+        height: 100vh;
+        overflow: hidden;
+    }
+    .layout-wrapper > div:first-child {
+        width: 45%;
+        overflow-y: auto;
+        overflow-x: hidden;
+        flex-shrink: 0;
+    }
+    .layout-wrapper > div:last-child {
+        width: 55%;
+        flex-grow: 1;
+        overflow: hidden;
+        flex-shrink: 0;
+    }
+</style>
+
+<div class="layout-wrapper">
+    <!-- Left Panel: Game Controls -->
+    <div class="game-panel" style="background-color: #f5f5f5;">
+        <div class="p-4">
+            <div class="text-center mb-4">
+                <h2 class="display-5">🎮 3D Tic-Tac-Toe</h2>
+                <p class="text-muted">Play on 2D board, visualize in 3D space</p>
+            </div>
+
+            @if (!Session.Board.IsGameOver)
+            {
+                <div class="alert alert-primary text-center">
+                    Current Player: <strong class="@GetPlayerClass()">@Session.Board.CurrentPlayer</strong>
+                </div>
+            }
+            else if (Session.Board.Winner != Player.None)
+            {
+                <div class="alert text-center" style="background-color: #22c55e; color: white; border-color: #16a34a;">
+                    <h5 class="mb-0">🎉 Winner: <strong>@Session.Board.Winner</strong></h5>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-info text-center">
+                    <h5 class="mb-0">🤝 Draw!</h5>
+                </div>
+            }
+
+            @* Move Confirmation Timer *@
+            @if (pendingMove != null && !Session.Board.IsGameOver)
+            {
+                <div class="alert alert-danger text-center mb-3">
+                    <h6 class="mb-2">⏱️ Confirming Move: (@pendingMove.Value.x, @pendingMove.Value.y, @pendingMove.Value.z)</h6>
+                    <div class="fs-1 fw-bold text-white mb-2" style="text-shadow: 0 0 10px rgba(0,0,0,0.5);">@countdown</div>
+                    <small class="d-block mb-3">Click same cell to cancel • Click different cell to change move</small>
+                    <div class="d-flex gap-2 justify-content-center">
+                        <button class="btn btn-success btn-sm" @onclick="ConfirmMoveNow">
+                            ✓ Confirm Move Now
+                        </button>
+                        <button class="btn btn-dark btn-sm" @onclick="CancelPendingMove">
+                            ✖ Cancel Move
+                        </button>
+                    </div>
+                </div>
+            }
+
+            <!-- Game Controls -->
+            <div class="text-center mb-4">
+                <button class="btn btn-success btn-lg mb-3 w-100" @onclick="RequestNewGame">
+                    🔄 New Game
+                </button>
+
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h6 class="card-title">Player Name</h6>
+                        <input class="form-control"
+                               type="text"
+                               placeholder="Used for autosave and refresh restore"
+                               @bind="playerName"
+                               @bind:event="oninput"
+                               @bind:after="OnPlayerNameChangedAsync" />
+                        <small class="text-muted d-block mt-2">
+                            Enter a player name to keep your current game through a browser refresh.
+                        </small>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(statusMessage))
+                {
+                    <div class="alert @statusClass">
+                        @statusMessage
+                    </div>
+                }
+
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h6 class="card-title">Board Size</h6>
+                        <div class="btn-group w-100" role="group">
+                            <button class="btn @GetBtnClass(3)" @onclick="() => SetBoardSize(3)" disabled="@isGameInProgress">
+                                3×3×3
+                            </button>
+                            <button class="btn @GetBtnClass(4)" @onclick="() => SetBoardSize(4)" disabled="@isGameInProgress">
+                                4×4×4
+                            </button>
+                            <button class="btn @GetBtnClass(5)" @onclick="() => SetBoardSize(5)" disabled="@isGameInProgress">
+                                5×5×5
+                            </button>
+                        </div>
+                        @if (isGameInProgress)
+                        {
+                            <small class="text-muted d-block mt-2">
+                                <em>Finish or reset current game to change board size</em>
+                            </small>
+                        }
+                    </div>
+                </div>
+
+                <!-- AI Mode Toggle (Chapter 9) -->
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" 
+                                   id="singlePlayerMode" 
+                                   @bind="Session.IsSinglePlayer" />
+                            <label class="form-check-label" for="singlePlayerMode">
+                                🤖 Play against AI
+                            </label>
+                        </div>
+                        @if (Session.IsSinglePlayer)
+                        {
+                            <div class="alert alert-info mt-2 mb-0">
+                                @if (Session.AiPlayer is Player.O)
+                                {
+                                    <small>You are <strong class="text-primary">X</strong>. The AI plays as <strong class="text-warning">O</strong>.</small>
+                                }
+                                else
+                                {
+                                    <small>The AI plays as <strong class="text-primary">X</strong>. You are <strong class="text-warning">O</strong>.</small>
+                                }
+                            </div>
+                            @if (Session.Board.MoveHistory.Count == 0)
+                            {
+                                <button class="btn btn-outline-info btn-sm w-100 mt-2" @onclick="LetAiGoFirst">
+                                    🤖 Let AI go first
+                                </button>
+                            }
+                            <div class="mt-2">
+                                <label class="form-label small fw-bold mb-1">AI Difficulty</label>
+                                <div class="btn-group w-100" role="group">
+                                    <button class="btn btn-sm @(Session.Difficulty == AiDifficulty.Easy ? "btn-success" : "btn-outline-success")"
+                                            @onclick="@(() => Session.Difficulty = AiDifficulty.Easy)">
+                                        😊 Easy
+                                    </button>
+                                    <button class="btn btn-sm @(Session.Difficulty == AiDifficulty.Medium ? "btn-warning" : "btn-outline-warning")"
+                                            @onclick="@(() => Session.Difficulty = AiDifficulty.Medium)">
+                                        🤔 Medium
+                                    </button>
+                                    <button class="btn btn-sm @(Session.Difficulty == AiDifficulty.Hard ? "btn-danger" : "btn-outline-danger")"
+                                            @onclick="@(() => Session.Difficulty = AiDifficulty.Hard)">
+                                        🧠 Hard
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h6 class="card-title">Camera View</h6>
+
+                        <!-- View preset buttons -->
+                        <div class="btn-group w-100 mb-2" role="group">
+                            <button class="btn btn-outline-primary btn-sm" @onclick="@(() => SetCameraView("front"))">
+                                📐 Front
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" @onclick="@(() => SetCameraView("back"))">
+                                📐 Back
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" @onclick="@(() => SetCameraView("left"))">
+                                📐 Left
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" @onclick="@(() => SetCameraView("right"))">
+                                📐 Right
+                            </button>
+                        </div>
+
+                        <div class="btn-group w-100 mb-3" role="group">
+                            <button class="btn btn-outline-primary btn-sm" @onclick="@(() => SetCameraView("top"))">
+                                🔼 Top
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" @onclick="@(() => SetCameraView("bottom"))">
+                                🔽 Bottom
+                            </button>
+                            <button class="btn btn-outline-success btn-sm" @onclick="@(() => SetCameraView("diagonal"))">
+                                📊 3D View
+                            </button>
+                        </div>
+
+                        <!-- Auto-rotate toggle -->
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" id="autoRotate"
+                                   checked="@autoRotate" @onchange="ToggleRotation">
+                            <label class="form-check-label" for="autoRotate">
+                                Auto-Rotate
+                            </label>
+                        </div>
+
+                        <!-- Rotation speed slider -->
+                        <label class="form-label small">Rotation Speed</label>
+                        <input type="range" class="form-range" min="0" max="0.02" step="0.001"
+                               value="@rotationSpeed" @oninput="UpdateRotationSpeed">
+
+                        <div class="mt-2 small text-muted">
+                            💡 <strong>Tips:</strong><br />
+                            • Use view buttons for standard perspectives<br />
+                            • Toggle auto-rotate to explore the board
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h6 class="card-title">Slice / Isolate Layer</h6>
+                        <div class="btn-group w-100 mb-2" role="group">
+                            <button class="btn @GetSliceBtnClass("none")" @onclick="@(() => SetSliceAxis("none"))">
+                                Full
+                            </button>
+                            <button class="btn @GetSliceBtnClass("x")" @onclick="@(() => SetSliceAxis("x"))">
+                                X
+                            </button>
+                            <button class="btn @GetSliceBtnClass("y")" @onclick="@(() => SetSliceAxis("y"))">
+                                Y
+                            </button>
+                            <button class="btn @GetSliceBtnClass("z")" @onclick="@(() => SetSliceAxis("z"))">
+                                Z
+                            </button>
+                        </div>
+                        <div class="text-center mb-2">
+                            <div class="fw-bold">Layer: @sliceIndex</div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <button class="btn btn-outline-secondary btn-sm"
+                                    disabled="@(sliceAxis == "none" || sliceIndex <= 1)"
+                                    @onclick="@(() => StepSliceIndex(-1))">
+                                ◀
+                            </button>
+                            <input type="range"
+                                   class="form-range flex-grow-1"
+                                   min="1"
+                                   max="@Session.Board.Size"
+                                   step="1"
+                                   value="@sliceIndex"
+                                   disabled="@(sliceAxis == "none")"
+                                   @oninput="UpdateSliceIndex" />
+                            <button class="btn btn-outline-secondary btn-sm"
+                                    disabled="@(sliceAxis == "none" || sliceIndex >= Session.Board.Size)"
+                                    @onclick="@(() => StepSliceIndex(1))">
+                                ▶
+                            </button>
+                        </div>
+                        <div class="d-flex justify-content-between small text-muted">
+                            @for (var i = 1; i <= Session.Board.Size; i++)
+                            {
+                                <span>@i</span>
+                            }
+                        </div>
+                        <div class="mt-2 small text-muted">
+                            • Choose X/Y/Z to isolate a layer<br />
+                            • Full shows all layers
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Game Board for Input -->
+            <div class="mb-4">
+                <h5 class="text-center mb-3">Make Your Move</h5>
+                <BoardDisplay Board="@Session.Board" OnCellClick="HandleMove" PendingMove="@pendingMove" />
+            </div>
+
+            <!-- Statistics -->
+            @if (Session.GamesPlayed > 0)
+            {
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">📊 Session Stats</h6>
+                        <div class="row text-center">
+                            <div class="col-3">
+                                <div class="stat-value">@Session.GamesPlayed</div>
+                                <div class="stat-label">Games</div>
+                            </div>
+                            <div class="col-3">
+                                <div class="stat-value text-primary">@Session.PlayerXWins</div>
+                                <div class="stat-label">X Wins</div>
+                            </div>
+                            <div class="col-3">
+                                <div class="stat-value text-warning">@Session.PlayerOWins</div>
+                                <div class="stat-label">O Wins</div>
+                            </div>
+                            <div class="col-3">
+                                <div class="stat-value text-secondary">@Session.Draws</div>
+                                <div class="stat-label">Draws</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <!-- Move History -->
+            @if (Session.Board.MoveHistory.Count > 0)
+            {
+                <div class="card mt-3">
+                    <div class="card-body">
+                        <h6 class="card-title">Move History</h6>
+                        <div class="move-history-scroll">
+                            @foreach (var (move, index) in Session.Board.MoveHistory.Select((m, i) => (m, i)))
+                            {
+                                <span class="badge bg-secondary me-1 mb-1">
+                                    @(index + 1). @move.Player: (@move.X,@move.Y,@move.Z)
+                                </span>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Right Panel: 3D Visualization -->
+    <div class="visualization-panel">
+        <div style="width: 100%; height: 100%; display: flex; flex-direction: column;">
+            <div style="padding: 1rem; background-color: #1a1a1a; color: white; text-align: center; flex-shrink: 0;">
+                <h4 style="margin: 0;">
+                    <span class="badge bg-primary">3D Visualization</span>
+                </h4>
+                <small style="color: #888;">WebGL-powered real-time rendering</small>
+            </div>
+            <div id="canvas-container" style="flex-grow: 1; position: relative; width: 100%; overflow: hidden;">
+                @if (showConfirmDialog)
+                {
+                    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+                        <div class="modal-dialog modal-dialog-centered">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Confirm New Game</h5>
+                                    <button type="button" class="btn-close" @onclick="CancelNewGame"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <p>A game is currently in progress. Starting a new game will discard the current game.</p>
+                                    <p class="mb-0"><strong>Are you sure you want to start a new game?</strong></p>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" @onclick="CancelNewGame">Cancel</button>
+                                    <button type="button" class="btn btn-success" @onclick="ConfirmNewGame">Yes, New Game</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+                <div class="position-absolute top-50 start-50 translate-middle text-white" id="loading-indicator">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading 3D view...</span>
+                    </div>
+                    <div class="mt-2">Initializing 3D Engine...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private IJSObjectReference? module;
+    private DotNetObjectReference<Play3D>? dotNetRef;
+    private bool isInitialized = false;
+    private bool autoRotate = false;  // Match JavaScript initial state
+    private double rotationSpeed = 0.005;
+    private bool isGameInProgress = false;
+    private bool showConfirmDialog = false;
+    private string sliceAxis = "none";
+    private int sliceIndex = 1;
+    private string playerName = string.Empty;
+    private string statusMessage = string.Empty;
+    private string statusClass = "alert-info";
+    private bool isRestoringState;
+
+    // Move confirmation timer state
+    private (int x, int y, int z)? pendingMove = null;
+    private System.Threading.Timer? confirmationTimer = null;
+    private int countdown = 0;
+    private const int ConfirmationSeconds = 10;
+
+    private readonly string jsVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? "dev";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Sync board state when parameters change (e.g., navigating to this page)
+        // Only sync if we've already done the initial render, to avoid duplicate syncs
+        if (isInitialized && module != null)
+        {
+            await SyncBoardState();
+            isGameInProgress = Session.Board.MoveHistory.Count > 0 && !Session.Board.IsGameOver;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                var storedPlayerName = await JS.InvokeAsync<string>("tttPlayerState.getPlayerName");
+                if (!string.IsNullOrWhiteSpace(storedPlayerName))
+                {
+                    playerName = storedPlayerName.Trim();
+                    await RestoreLatestAutoSaveAsync();
+                }
+
+                Console.WriteLine("\n[SERVER] ========== OnAfterRenderAsync START ==========");
+                Console.WriteLine($"[SERVER] Board Size: {Session.Board.Size}");
+                Console.WriteLine($"[SERVER] Move History Count: {Session.Board.MoveHistory.Count}");
+                Console.WriteLine($"[SERVER] Is Game Over: {Session.Board.IsGameOver}");
+
+                // Check if Three.js is available
+                Console.WriteLine("[SERVER] Loading modern ES module with Three.js...");
+
+                // Remove MainLayout padding so 3D view fills the panel
+                await JS.InvokeVoidAsync("eval", @"
+                    var article = document.querySelector('article.content');
+                    if (article) { article.style.padding = '0'; article.style.maxWidth = '100%'; }
+                    var topRow = document.querySelector('.top-row');
+                    if (topRow) { topRow.style.display = 'none'; }
+                ");
+
+                // FORCE FRESH LOAD: We use a timestamp to bypass browser cache
+                var timestamp = DateTime.Now.Ticks;
+                Console.WriteLine($"[SERVER] Importing game3d.js with timestamp: {timestamp}");
+                
+                module = await JS.InvokeAsync<IJSObjectReference>("import", $"./js/game3d.js?v={timestamp}");
+                Console.WriteLine("[SERVER] ✓ game3d.js module imported successfully (ES6 module with Three.js)");
+
+                // Initialize the 3D board
+                Console.WriteLine($"[SERVER] Calling init3DBoard with size: {Session.Board.Size}");
+                await module.InvokeVoidAsync("init3DBoard", "canvas-container", Session.Board.Size);
+                Console.WriteLine("[SERVER] ✓ init3DBoard completed");
+
+                isInitialized = true;
+                Console.WriteLine("[SERVER] ✓ isInitialized = true");
+
+                dotNetRef = DotNetObjectReference.Create(this);
+                await module.InvokeVoidAsync("setDotNetReference", dotNetRef);
+                await module.InvokeVoidAsync("setSlice", sliceAxis, sliceIndex);
+
+                Session.OnStateChanged += OnGameStateChanged;
+                Console.WriteLine("[SERVER] ✓ Subscribed to OnStateChanged");
+
+                Console.WriteLine("[SERVER] Starting SyncBoardState...");
+                await SyncBoardState();
+                Console.WriteLine("[SERVER] ✓ SyncBoardState completed");
+
+                isGameInProgress = Session.Board.MoveHistory.Count > 0 && !Session.Board.IsGameOver;
+                Console.WriteLine($"[SERVER] ✓ isGameInProgress = {isGameInProgress}");
+
+                Console.WriteLine("[SERVER] ========== OnAfterRenderAsync SUCCESS ==========\n");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("\n[SERVER] ========== OnAfterRenderAsync EXCEPTION ==========");
+                Console.Error.WriteLine($"[SERVER] Exception Type: {ex.GetType().FullName}");
+                Console.Error.WriteLine($"[SERVER] Message: {ex.Message}");
+                Console.Error.WriteLine($"[SERVER] Stack: {ex.StackTrace}");
+                if (ex.InnerException != null)
+                {
+                    Console.Error.WriteLine($"[SERVER] Inner Exception: {ex.InnerException.Message}");
+                }
+                Console.WriteLine("[SERVER] ==========");
+                Console.WriteLine("[SERVER] ==========");
+                Console.Error.WriteLine($"Error initializing 3D view: {ex.Message}");
+                // Show error in loading indicator (without interpolating exception text to avoid JS syntax errors)
+                await JS.InvokeVoidAsync("eval", @"const loader = document.getElementById('loading-indicator'); if (loader) { loader.innerHTML = '<div class=""text-danger""><i class=""bi bi-exclamation-triangle""></i><br/>Error loading 3D view<br/><small>Check browser console for details</small></div>'; }");
+            }
+        }
+    }
+    
+    [JSInvokable]
+    public async Task Handle3DMove(int x, int y, int z)
+    {
+        await InvokeAsync(() =>
+        {
+            if (Session.Board.IsGameOver)
+            {
+                return;
+            }
+
+            // Guard: Don't allow player to move during AI's turn
+            if (Session.IsSinglePlayer && Session.Board.CurrentPlayer == Session.AiPlayer)
+            {
+                Console.WriteLine("[SERVER] Handle3DMove: AI's turn, move rejected");
+                return;
+            }
+
+            if (Session.Board.GetPlayer(x, y, z) != Player.None)
+            {
+                return;
+            }
+
+            // If clicking the same pending cell, confirm it immediately
+            if (pendingMove != null && pendingMove.Value.x == x && 
+                pendingMove.Value.y == y && pendingMove.Value.z == z)
+            {
+                Console.WriteLine("[SERVER] Handle3DMove: Same cell clicked, confirming move");
+                ConfirmMove();
+                return;
+            }
+
+            // Start or restart the confirmation timer
+            StartMoveConfirmation(x, y, z);
+        });
+    }
+    private async void OnGameStateChanged()
+    {
+        Console.WriteLine("[SERVER] OnGameStateChanged fired");
+        await InvokeAsync(async () =>
+        {
+            Console.WriteLine("[SERVER]   → StateHasChanged()");
+            StateHasChanged();
+            
+            Console.WriteLine("[SERVER]   → SyncBoardState()");
+            await SyncBoardState();
+
+            await AutoSaveCurrentStateAsync();
+
+            // Update game in progress status
+            isGameInProgress = Session.Board.MoveHistory.Count > 0 && !Session.Board.IsGameOver;
+            Console.WriteLine($"[SERVER]   → isGameInProgress = {isGameInProgress}");
+        });
+    }
+
+    private async Task SyncBoardState()
+    {
+        if (!isInitialized || module == null)
+        {
+            Console.WriteLine("[SERVER] SyncBoardState: Skipped (isInitialized={0}, module={1})", isInitialized, module != null ? "loaded" : "null");
+            return;
+        }
+
+        try
+        {
+            Console.WriteLine($"[SERVER] SyncBoardState: Starting for {Session.Board.Size}x{Session.Board.Size}x{Session.Board.Size} board");
+            int cellCount = 0;
+            int cellsWithPieces = 0;
+
+            // Update all cells
+            for (int x = 1; x <= Session.Board.Size; x++)
+            {
+                for (int y = 1; y <= Session.Board.Size; y++)
+                {
+                    for (int z = 1; z <= Session.Board.Size; z++)
+                    {
+                        var player = Session.Board.GetPlayer(x, y, z);
+                        var playerStr = player == Player.None ? "" : player.ToString();
+                        
+                        try
+                        {
+                            await module.InvokeVoidAsync("updateCell", x, y, z, playerStr);
+                            cellCount++;
+                            if (playerStr != "") cellsWithPieces++;
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[SERVER] Error updating cell ({x},{y},{z}): {ex.Message}");
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine($"[SERVER] SyncBoardState: Updated {cellCount} cells, {cellsWithPieces} have pieces");
+
+            // Highlight winning line if game is over
+            if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
+            {
+                Console.WriteLine($"[SERVER] SyncBoardState: Game Over - Winner: {Session.Board.Winner}");
+                Console.WriteLine($"[SERVER] SyncBoardState: WinningPositions count: {Session.Board.WinningPositions.Count}");
+                Console.WriteLine($"[SERVER] SyncBoardState: WinningPositions: {string.Join(", ", Session.Board.WinningPositions)}");
+                Console.WriteLine($"[SERVER] SyncBoardState: Highlighting winning positions...");
+
+                // Convert IReadOnlyList to List for proper JSInterop serialization
+                var positions = Session.Board.WinningPositions.ToList();
+                await module.InvokeVoidAsync("highlightWinningLine", positions);
+
+                Console.WriteLine("[SERVER] SyncBoardState: ✓ Winning line highlighted");
+            }
+
+            Console.WriteLine("[SERVER] SyncBoardState: ✓ Complete");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SERVER] SyncBoardState Exception: {ex.GetType().FullName}");
+            Console.Error.WriteLine($"[SERVER] Message: {ex.Message}");
+            Console.Error.WriteLine($"[SERVER] Stack: {ex.StackTrace}");
+        }
+    }
+
+    private async void HandleMove((int x, int y, int z) move)
+    {
+        Console.WriteLine($"[SERVER] HandleMove: ({move.x},{move.y},{move.z})");
+
+        if (Session.Board.IsGameOver)
+        {
+            Console.WriteLine("[SERVER] HandleMove: Game already over, move rejected");
+            return;
+        }
+
+        // Guard: Don't allow player to move during AI's turn
+        if (Session.IsSinglePlayer && Session.Board.CurrentPlayer == Session.AiPlayer)
+        {
+            Console.WriteLine("[SERVER] HandleMove: AI's turn, move rejected");
+            return;
+        }
+
+        // If clicking the same pending cell, confirm it immediately
+        if (pendingMove != null && pendingMove.Value.x == move.x && 
+            pendingMove.Value.y == move.y && pendingMove.Value.z == move.z)
+        {
+            Console.WriteLine("[SERVER] HandleMove: Same cell clicked, confirming move");
+            ConfirmMove();
+            return;
+        }
+
+        // Start or restart the confirmation timer
+        StartMoveConfirmation(move.x, move.y, move.z);
+    }
+
+    private async void RequestNewGame()
+    {
+        Console.WriteLine("[SERVER] RequestNewGame called");
+        
+        // Check if game is in progress
+        if (isGameInProgress)
+        {
+            Console.WriteLine("[SERVER] RequestNewGame: Game in progress, showing confirmation dialog");
+            showConfirmDialog = true;
+            StateHasChanged();
+            return;
+        }
+
+        if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
+        {
+            Console.WriteLine($"[SERVER] RequestNewGame: Recording game result - Winner: {Session.Board.Winner}");
+            Session.RecordGameResult();
+        }
+
+        Session.ResetGame();
+        isGameInProgress = false;
+        Console.WriteLine("[SERVER] RequestNewGame: Game reset");
+
+        if (module != null && isInitialized)
+        {
+            Console.WriteLine($"[SERVER] RequestNewGame: Calling resetBoard with size {Session.Board.Size}");
+            await module.InvokeVoidAsync("resetBoard", Session.Board.Size);
+        }
+    }
+
+    private async void ConfirmNewGame()
+    {
+        Console.WriteLine("[SERVER] ConfirmNewGame called");
+        showConfirmDialog = false;
+
+        if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
+        {
+            Console.WriteLine($"[SERVER] ConfirmNewGame: Recording game result - Winner: {Session.Board.Winner}");
+            Session.RecordGameResult();
+        }
+
+        Session.ResetGame();
+        isGameInProgress = false;
+        Console.WriteLine("[SERVER] ConfirmNewGame: Game reset");
+
+
+        if (module != null && isInitialized)
+        {
+            await module.InvokeVoidAsync("resetBoard", Session.Board.Size);
+        }
+
+        StateHasChanged();
+    }
+
+    private void CancelNewGame()
+    {
+        showConfirmDialog = false;
+        StateHasChanged();
+    }
+
+    private async void LetAiGoFirst()
+    {
+        if (Session.Board.MoveHistory.Count > 0) return;
+
+        await Session.AiGoesFirstAsync();
+        isGameInProgress = true;
+
+        await InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await SyncBoardState();
+        });
+    }
+
+    private async void SetBoardSize(int size)
+    {
+        if (Session.Board.Size == size) return;
+
+        // Prevent changing board size during active game
+        if (isGameInProgress)
+        {
+            return;
+        }
+
+        if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
+        {
+            Session.RecordGameResult();
+        }
+
+        Session.StartNewGame(size);
+
+        if (module != null && isInitialized)
+        {
+            await module.InvokeVoidAsync("resetBoard", size);
+            if (sliceIndex > size)
+            {
+                sliceIndex = size;
+            }
+            await module.InvokeVoidAsync("setSlice", sliceAxis, sliceIndex);
+            await SyncBoardState();
+        }
+    }
+
+    private async Task OnPlayerNameChangedAsync()
+    {
+        playerName = playerName.TrimStart();
+        await JS.InvokeVoidAsync("tttPlayerState.setPlayerName", playerName);
+        await AutoSaveCurrentStateAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task AutoSaveCurrentStateAsync()
+    {
+        if (isRestoringState || string.IsNullOrWhiteSpace(playerName))
+        {
+            return;
+        }
+
+        await JS.InvokeVoidAsync("tttPlayerState.setPlayerName", playerName);
+        await DataService.UpsertAutoSaveAsync(Session, playerName.Trim());
+    }
+
+    private async Task RestoreLatestAutoSaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            return;
+        }
+
+        var autoSave = await DataService.GetLatestAutoSaveAsync(playerName.Trim());
+        if (autoSave is null)
+        {
+            return;
+        }
+
+        isRestoringState = true;
+        try
+        {
+            Session.LoadGame(autoSave.GameJson);
+            statusMessage = $"Restored your latest game for {playerName.Trim()}.";
+            statusClass = "alert-info";
+        }
+        finally
+        {
+            isRestoringState = false;
+        }
+    }
+
+    private async void ToggleRotation(ChangeEventArgs e)
+    {
+        autoRotate = (bool)(e.Value ?? true);
+
+        if (module != null && isInitialized)
+        {
+            await module.InvokeVoidAsync("toggleRotation", autoRotate);
+        }
+    }
+
+    private async void UpdateRotationSpeed(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), out double speed))
+        {
+            rotationSpeed = speed;
+
+            if (module != null && isInitialized)
+            {
+                await module.InvokeVoidAsync("setRotationSpeed", rotationSpeed);
+            }
+        }
+    }
+
+    private async void SetCameraView(string view)
+    {
+        if (module != null && isInitialized)
+        {
+            await module.InvokeVoidAsync("setCameraView", view);
+        }
+    }
+
+    private async void SetSliceAxis(string axis)
+    {
+        sliceAxis = axis;
+        if (sliceAxis == "none")
+        {
+            sliceIndex = 1;
+        }
+        if (module != null && isInitialized)
+        {
+            await module.InvokeVoidAsync("setSlice", sliceAxis, sliceIndex);
+        }
+    }
+
+    private async void UpdateSliceIndex(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out int value))
+        {
+            await SetSliceIndex(value);
+        }
+    }
+
+    private async Task SetSliceIndex(int value)
+    {
+        if (value >= 1 && value <= Session.Board.Size)
+        {
+            sliceIndex = value;
+            if (module != null && isInitialized)
+            {
+                await module.InvokeVoidAsync("setSlice", sliceAxis, sliceIndex);
+            }
+        }
+    }
+
+    private async void StepSliceIndex(int delta)
+    {
+        var next = sliceIndex + delta;
+        if (next < 1 || next > Session.Board.Size) return;
+        await SetSliceIndex(next);
+    }
+
+    private string GetBtnClass(int size)
+    {
+        // Disable board size buttons if game is in progress
+        if (isGameInProgress)
+        {
+            return Session.Board.Size == size ? "btn-secondary disabled" : "btn-outline-secondary disabled";
+        }
+        return Session.Board.Size == size ? "btn-primary" : "btn-outline-primary";
+    }
+
+    private string GetPlayerClass()
+    {
+        return Session.Board.CurrentPlayer == Player.X ? "text-primary" : "text-warning";
+    }
+
+    private string GetSliceBtnClass(string axis)
+    {
+        return sliceAxis == axis ? "btn-primary" : "btn-outline-primary";
+    }
+
+    private void StartMoveConfirmation(int x, int y, int z)
+    {
+        Console.WriteLine($"[SERVER] StartMoveConfirmation: ({x},{y},{z})");
+
+        // Cancel any existing timer
+        confirmationTimer?.Dispose();
+
+        // Set pending move
+        pendingMove = (x, y, z);
+        countdown = ConfirmationSeconds;
+
+        // Update 3D view to show pending move
+        if (module != null && isInitialized)
+        {
+            _ = module.InvokeVoidAsync("showPendingMove", x, y, z);
+        }
+
+        // Start countdown timer (ticks every second)
+        confirmationTimer = new System.Threading.Timer(_ =>
+        {
+            InvokeAsync(() =>
+            {
+                countdown--;
+                Console.WriteLine($"[SERVER] Countdown: {countdown}");
+
+                if (countdown <= 0)
+                {
+                    ConfirmMove();
+                }
+                else
+                {
+                    StateHasChanged();
+                }
+            });
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+        StateHasChanged();
+    }
+
+    private void CancelPendingMove()
+    {
+        Console.WriteLine("[SERVER] CancelPendingMove called");
+        confirmationTimer?.Dispose();
+        confirmationTimer = null;
+        pendingMove = null;
+        countdown = 0;
+
+        // Clear pending move in 3D view
+        if (module != null && isInitialized)
+        {
+            _ = module.InvokeVoidAsync("clearPendingMove");
+        }
+
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void ConfirmMoveNow()
+    {
+        Console.WriteLine("[SERVER] ConfirmMoveNow called - immediate confirmation");
+        // Set countdown to 0 to trigger immediate confirmation
+        countdown = 0;
+        // ConfirmMove() will be called on the next timer tick, or we can call it directly
+        ConfirmMove();
+    }
+
+    private async void ConfirmMove()
+    {
+        if (pendingMove == null) return;
+
+        var move = pendingMove.Value;
+        Console.WriteLine($"[SERVER] ConfirmMove: ({move.x},{move.y},{move.z})");
+
+        // Clean up timer and clear 3D pending indicator
+        confirmationTimer?.Dispose();
+        confirmationTimer = null;
+        pendingMove = null;
+        countdown = 0;
+
+        if (module != null && isInitialized)
+        {
+            await module.InvokeVoidAsync("clearPendingMove");
+        }
+
+        // Use async version for AI support (Chapter 9)
+        bool success = await Session.MakeMoveAsync(move.x, move.y, move.z);
+        Console.WriteLine($"[SERVER] ConfirmMove: success={success}");
+
+        if (success)
+        {
+            isGameInProgress = !Session.Board.IsGameOver;
+            Console.WriteLine($"[SERVER] ConfirmMove: isGameInProgress set to {isGameInProgress}");
+
+            // After MakeMoveAsync returns (includes AI move), ensure UI + 3D are synced
+            await InvokeAsync(async () =>
+            {
+                StateHasChanged();
+                await SyncBoardState();
+            });
+        }
+    }
+
+
+    public async ValueTask DisposeAsync()
+    {
+        confirmationTimer?.Dispose();
+        Session.OnStateChanged -= OnGameStateChanged;
+        dotNetRef?.Dispose();
+        if (module != null)
+        {
+            try
+            {
+                await module.InvokeVoidAsync("cleanup");
+                await module.DisposeAsync();
+            }
+            catch { }
+        }
+    }
+}
