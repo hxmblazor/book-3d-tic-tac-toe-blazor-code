@@ -26,9 +26,9 @@ This repository is for readers who want more than a minimal sample application. 
 
 ## Related Links
 
-- Book home / updates: `ADD-URL-HERE`
+- Book home / updates: `https://leanpub.com/blazor-3d-tic-tac-toe`
 - Live project: `https://3d-tictactoe.com`
-- Book listing: `ADD-URL-HERE`
+- Book listing: `https://leanpub.com/blazor-3d-tic-tac-toe`
 
 ## Notes
 
