@@ -207,22 +207,26 @@
         // if (!success) { ShowToast("Invalid move!"); }
     }
 
-    private void ResetGame()
+    private async Task ResetGame()
     {
         if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
         {
             Session.RecordGameResult();
         }
+
+        await ClearAutoSaveAsync();
         Session.ResetGame();
     }
 
-    private void SetBoardSize(int size)
+    private async Task SetBoardSize(int size)
     {
         if (Session.Board.Size == size) return;
         if (Session.Board.IsGameOver && Session.Board.Winner != Player.None)
         {
             Session.RecordGameResult();
         }
+
+        await ClearAutoSaveAsync();
         Session.StartNewGame(size);
     }
 
@@ -325,6 +329,14 @@
         await DataService.UpsertAutoSaveAsync(Session, playerName.Trim());
     }
 
+    private Task ClearAutoSaveAsync()
+    {
+        var normalizedPlayerName = playerName.Trim();
+        return string.IsNullOrWhiteSpace(normalizedPlayerName)
+            ? Task.CompletedTask
+            : DataService.DeleteAutoSaveAsync(normalizedPlayerName);
+    }
+
     private async Task RestoreLatestAutoSaveAsync()
     {
         if (string.IsNullOrWhiteSpace(playerName))
@@ -342,7 +354,7 @@
         try
         {
             Session.LoadGame(autoSave.GameJson);
-            SetStatus($"Restored your latest game for {playerName.Trim()}.", "alert-info");
+            SetStatus($"Restored your latest in-progress game for {playerName.Trim()}.", "alert-info");
         }
         finally
         {

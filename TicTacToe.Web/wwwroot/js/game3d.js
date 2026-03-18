@@ -35,14 +35,14 @@ const animations = {
 const COLORS = {
     background: 0x0f172a,
     backgroundAccent: 0x1e293b,
-    grid: 0x60a5fa,
-    gridGlow: 0x3b82f6,
+    grid: 0x93c5fd,
+    gridGlow: 0x60a5fa,
     playerX: 0x06b6d4,
     playerXGlow: 0x22d3ee,
     playerO: 0xf59e0b,
     playerOGlow: 0xfbbf24,
     empty: 0x1e3a5f,
-    emptyEdge: 0x3b82f6,
+    emptyEdge: 0x93c5fd,
     ambient: 0x404040,
     directional: 0xffffff,
     pointLight: 0x60a5fa,
@@ -437,7 +437,7 @@ function createBoard() {
 
                 const edges = new THREE.EdgesGeometry(geometry);
                 cube.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ 
-                    color: COLORS.emptyEdge, opacity: 0.4, transparent: true 
+                    color: COLORS.emptyEdge, opacity: 0.65, transparent: true 
                 })));
 
                 boardGroup.add(cube);
@@ -455,7 +455,7 @@ function createBoard() {
 
 function createGridLines(spacing, offset) {
     console.log(`[GRID-LINES] Creating grid lines for ${boardSize} layers`);
-    const mat = new THREE.LineBasicMaterial({ color: COLORS.grid, opacity: 0.3, transparent: true });
+    const mat = new THREE.LineBasicMaterial({ color: COLORS.grid, opacity: 0.5, transparent: true });
     
     let lineCount = 0;
     for (let layer = 0; layer < boardSize; layer++) {

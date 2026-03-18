@@ -669,7 +669,7 @@
         StartMoveConfirmation(move.x, move.y, move.z);
     }
 
-    private async void RequestNewGame()
+    private async Task RequestNewGame()
     {
         Console.WriteLine("[SERVER] RequestNewGame called");
         
@@ -688,6 +688,7 @@
             Session.RecordGameResult();
         }
 
+        await ClearAutoSaveAsync();
         Session.ResetGame();
         isGameInProgress = false;
         Console.WriteLine("[SERVER] RequestNewGame: Game reset");
@@ -699,7 +700,7 @@
         }
     }
 
-    private async void ConfirmNewGame()
+    private async Task ConfirmNewGame()
     {
         Console.WriteLine("[SERVER] ConfirmNewGame called");
         showConfirmDialog = false;
@@ -710,6 +711,7 @@
             Session.RecordGameResult();
         }
 
+        await ClearAutoSaveAsync();
         Session.ResetGame();
         isGameInProgress = false;
         Console.WriteLine("[SERVER] ConfirmNewGame: Game reset");
@@ -743,7 +745,7 @@
         });
     }
 
-    private async void SetBoardSize(int size)
+    private async Task SetBoardSize(int size)
     {
         if (Session.Board.Size == size) return;
 
@@ -758,6 +760,7 @@
             Session.RecordGameResult();
         }
 
+        await ClearAutoSaveAsync();
         Session.StartNewGame(size);
 
         if (module != null && isInitialized)
@@ -791,6 +794,14 @@
         await DataService.UpsertAutoSaveAsync(Session, playerName.Trim());
     }
 
+    private Task ClearAutoSaveAsync()
+    {
+        var normalizedPlayerName = playerName.Trim();
+        return string.IsNullOrWhiteSpace(normalizedPlayerName)
+            ? Task.CompletedTask
+            : DataService.DeleteAutoSaveAsync(normalizedPlayerName);
+    }
+
     private async Task RestoreLatestAutoSaveAsync()
     {
         if (string.IsNullOrWhiteSpace(playerName))
@@ -808,7 +819,7 @@
         try
         {
             Session.LoadGame(autoSave.GameJson);
-            statusMessage = $"Restored your latest game for {playerName.Trim()}.";
+            statusMessage = $"Restored your latest in-progress game for {playerName.Trim()}.";
             statusClass = "alert-info";
         }
         finally

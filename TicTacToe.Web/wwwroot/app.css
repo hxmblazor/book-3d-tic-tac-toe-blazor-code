@@ -54,10 +54,12 @@ h1:focus {
 .layer-grid {
     display: grid;
     gap: 5px;
-    background-color: #333;
+    background-color: #334155;
     padding: 5px;
     border-radius: 8px;
     margin: 0 auto;
+    border: 1px solid rgba(147, 197, 253, 0.45);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.15);
 }
 
 .game-cell {

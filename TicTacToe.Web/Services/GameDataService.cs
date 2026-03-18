@@ -54,9 +54,29 @@ public class GameDataService(ApplicationDbContext context)
         var savedAt = DateTime.UtcNow;
         var board = session.Board;
 
-        var savedGame = await context.SavedGames.FirstOrDefaultAsync(
-            x => x.PlayerName == normalizedPlayerName && x.FriendlyName == AutoSaveFriendlyName,
-            cancellationToken);
+        if (board.MoveHistory.Count == 0 || board.IsGameOver)
+        {
+            await DeleteAutoSaveAsync(normalizedPlayerName, cancellationToken);
+            return new SavedGame
+            {
+                PlayerName = normalizedPlayerName,
+                FriendlyName = AutoSaveFriendlyName,
+                BoardSize = board.Size,
+                Winner = board.Winner is Player.None ? null : board.Winner.ToString(),
+                MoveCount = board.MoveHistory.Count,
+                CreatedAt = savedAt,
+                UpdatedAt = savedAt,
+                GameJson = session.SerializeGame()
+            };
+        }
+
+        var autoSaves = await GetAutoSavesAsync(normalizedPlayerName, cancellationToken);
+        var savedGame = autoSaves.FirstOrDefault();
+
+        if (autoSaves.Count > 1)
+        {
+            context.SavedGames.RemoveRange(autoSaves.Skip(1));
+        }
 
         if (savedGame is null)
         {
@@ -116,7 +136,7 @@ public class GameDataService(ApplicationDbContext context)
                 cancellationToken);
     }
 
-    public Task<SavedGame?> GetLatestAutoSaveAsync(
+    public async Task<SavedGame?> GetLatestAutoSaveAsync(
         string playerName,
         CancellationToken cancellationToken = default)
     {
@@ -124,12 +144,46 @@ public class GameDataService(ApplicationDbContext context)
 
         var normalizedPlayerName = playerName.Trim();
 
-        return context.SavedGames
-            .AsNoTracking()
-            .Where(x => x.PlayerName == normalizedPlayerName && x.FriendlyName == AutoSaveFriendlyName)
-            .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
-            .ThenByDescending(x => x.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+        var autoSaves = await GetAutoSavesAsync(normalizedPlayerName, cancellationToken);
+        if (autoSaves.Count == 0)
+        {
+            return null;
+        }
+
+        SavedGame? latestValidAutoSave = null;
+        var staleAutoSaves = new List<SavedGame>();
+
+        foreach (var autoSave in autoSaves)
+        {
+            try
+            {
+                var board = GameBoard.DeserializeGame(autoSave.GameJson);
+                if (board.MoveHistory.Count > 0 && !board.IsGameOver && latestValidAutoSave is null)
+                {
+                    latestValidAutoSave = autoSave;
+                    continue;
+                }
+            }
+            catch
+            {
+                // Treat corrupt autosaves as stale rows that should be discarded.
+            }
+
+            staleAutoSaves.Add(autoSave);
+        }
+
+        if (latestValidAutoSave is not null)
+        {
+            staleAutoSaves.AddRange(autoSaves.Where(x => x.Id != latestValidAutoSave.Id));
+        }
+
+        if (staleAutoSaves.Count > 0)
+        {
+            context.SavedGames.RemoveRange(staleAutoSaves.DistinctBy(x => x.Id));
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
+        return latestValidAutoSave;
     }
 
     public async Task<bool> DeleteGameAsync(
@@ -155,6 +209,32 @@ public class GameDataService(ApplicationDbContext context)
 
         return true;
     }
+
+    public async Task DeleteAutoSaveAsync(
+        string playerName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(playerName);
+
+        var normalizedPlayerName = playerName.Trim();
+        var autoSaves = await GetAutoSavesAsync(normalizedPlayerName, cancellationToken);
+        if (autoSaves.Count == 0)
+        {
+            return;
+        }
+
+        context.SavedGames.RemoveRange(autoSaves);
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    private Task<List<SavedGame>> GetAutoSavesAsync(
+        string normalizedPlayerName,
+        CancellationToken cancellationToken = default) =>
+        context.SavedGames
+            .Where(x => x.PlayerName == normalizedPlayerName && x.FriendlyName == AutoSaveFriendlyName)
+            .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
+            .ThenByDescending(x => x.CreatedAt)
+            .ToListAsync(cancellationToken);
 
     private static string NormalizeFriendlyName(string? friendlyName, DateTime savedAt)
     {
